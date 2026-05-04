@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Build output
+.next/
+
+# Environment files - API keys burada saklanır
+.env.local
+.env.*.local
+
+# Misc
+*.log
+.DS_Store
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
