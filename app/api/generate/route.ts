@@ -154,36 +154,88 @@ function parseGuide(content: string): GuideOptions {
   return options
 }
 
-function generateSubtitlesFromVideo(outputSrtPath: string): boolean {
-  try {
-    let content = ''
-    for (let i = 1; i <= 12; i++) {
-      const start = (i - 1) * 5
-      const end = i * 5
-      const startH = Math.floor(start / 3600).toString().padStart(2, '0')
-      const startM = Math.floor((start % 3600) / 60).toString().padStart(2, '0')
-      const startS = (start % 60).toString().padStart(2, '0')
-      const endH = Math.floor(end / 3600).toString().padStart(2, '0')
-      const endM = Math.floor((end % 3600) / 60).toString().padStart(2, '0')
-      const endS = (end % 60).toString().padStart(2, '0')
-      content += `${i}\n${startH}:${startM}:${startS},000 --> ${endH}:${endM}:${endS},000\n[İçerik ${i}]\n\n`
+async function generateSubtitlesFromVideo(
+  videoPath: string,
+  outputSrtPath: string,
+  log: (msg: string, type?: string) => void
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      const scriptPath = path.join(process.cwd(), 'scripts', 'transcribe.py')
+      if (!fs.existsSync(scriptPath)) {
+        log(`   ⚠️ Transkripsiyon scripti bulunamadı: ${scriptPath}`, 'error')
+        resolve(false)
+        return
+      }
+
+      const videoPathUnix = videoPath.replace(/\\/g, '/')
+      const srtPathUnix = outputSrtPath.replace(/\\/g, '/')
+
+      log(`   🎙️ Whisper ile altyazı oluşturuluyor...`, 'info')
+      const cmd = `python "${scriptPath}" "${videoPathUnix}" "${srtPathUnix}" base`
+      const proc = spawn(cmd, [], { shell: true })
+
+      let stdout = ''
+      let stderr = ''
+      if (proc.stdout) proc.stdout.on('data', (d: Buffer) => {
+        const line = d.toString().trim()
+        stdout += line + '\n'
+        if (line) log(`   🎙️ ${line}`, 'info')
+      })
+      if (proc.stderr) proc.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
+
+      proc.on('close', (code: number | null) => {
+        if (code === 0 && fs.existsSync(outputSrtPath)) {
+          const content = fs.readFileSync(outputSrtPath, 'utf-8')
+          const segmentCount = (content.match(/^\d+$/gm) || []).length
+          log(`   ✅ Whisper transkripsiyon tamamlandı (${segmentCount} segment)`, 'success')
+          resolve(true)
+        } else {
+          log(`   ⚠️ Whisper transkripsiyon başarısız: ${stderr.slice(-300)}`, 'error')
+          // Fallback: boş SRT oluştur (video yine de üretilsin)
+          try {
+            fs.writeFileSync(outputSrtPath, '', 'utf-8')
+          } catch {}
+          resolve(false)
+        }
+      })
+
+      proc.on('error', (err: Error) => {
+        log(`   ⚠️ Python çalıştırılamadı: ${err.message}`, 'error')
+        resolve(false)
+      })
+    } catch (e: any) {
+      log(`   ⚠️ Altyazı oluşturma hatası: ${e.message}`, 'error')
+      resolve(false)
     }
-    fs.writeFileSync(outputSrtPath, content, 'utf-8')
-    return true
-  } catch (e: any) {
-    return false
-  }
+  })
 }
 
 async function burnSubtitles(ffmpegExe: string, videoPath: string, subtitlePath: string, outputPath: string): Promise<boolean> {
   return new Promise((resolve) => {
     try {
-      const cmd = `"${ffmpegExe}" -y -i "${videoPath}" -vf "subtitles=${subtitlePath}:force_at_top=0:force_style='FontSize=24,PrimaryColour=&HFFFFFF,OutlineColour=&H000000,Outline=2,MarginV=30'" -c:v libx264 -preset ultrafast -crf 28 -pix_fmt yuv420p -c:a aac -y "${outputPath}"`
+      // FFmpeg subtitle filtresi Windows yollarında : ve \ ile sorun çıkarır
+      // Yolu / ile değiştir ve : karakterini escape et
+      const escapedSubPath = subtitlePath
+        .replace(/\\/g, '/')
+        .replace(/:/g, '\\\\:')
+      const videoPathUnix = videoPath.replace(/\\/g, '/')
+      const outputPathUnix = outputPath.replace(/\\/g, '/')
+      const cmd = `"${ffmpegExe}" -y -i "${videoPathUnix}" -vf "subtitles='${escapedSubPath}':force_style='FontSize=24,PrimaryColour=&HFFFFFF,OutlineColour=&H000000,Outline=2,MarginV=30'" -c:v libx264 -preset ultrafast -crf 28 -pix_fmt yuv420p -c:a aac -y "${outputPathUnix}"`
+      console.log('[burnSubtitles] cmd:', cmd.substring(0, 300))
       const proc = spawn(cmd, [], { shell: true })
+      let stderr = ''
+      if (proc.stderr) proc.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
       proc.on('close', (code: number | null) => {
+        if (code !== 0) {
+          console.error('[burnSubtitles] FFmpeg error:', stderr.slice(-500))
+        }
         resolve(code === 0 && fs.existsSync(outputPath))
       })
-      proc.on('error', () => resolve(false))
+      proc.on('error', (err) => {
+        console.error('[burnSubtitles] spawn error:', err.message)
+        resolve(false)
+      })
     } catch (e: any) {
       console.error(`   ⚠️ Burn subtitles failed: ${e.message}`)
       resolve(false)
@@ -451,11 +503,11 @@ async function createShortsVideo(
     p(82, 'Watermark ekleniyor')
     const withWatermark = path.join(outputDir, `${baseName}_wm.mp4`)
 
-    // Watermark son 10 saniyede (48-58) gösterilecek - FFmpeg video süresi 58sn total
+    // Watermark son 10 saniyede (48-58) gösterilecek - ÜST KENARA YAKIN
     const fontSize = 'h/34'
     const drawTextFilter = line2
-      ? `drawtext=text='${line1}':fontsize=${fontSize}:fontcolor=white:x=(w-text_w)/2:y=30:borderw=2:bordercolor=black:enable='between(t,48,58)',drawtext=text='${line2}':fontsize=${fontSize}:fontcolor=white:x=(w-text_w)/2:y=h-80:borderw=2:bordercolor=black:enable='between(t,48,58)'`
-      : `drawtext=text='${line1}':fontsize=${fontSize}:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2:borderw=2:bordercolor=black:enable='between(t,48,58)'`
+      ? `drawtext=text='${line1}':fontsize=${fontSize}:fontcolor=white:x=(w-text_w)/2:y=30:borderw=2:bordercolor=black:enable='between(t,48,58)',drawtext=text='${line2}':fontsize=${fontSize}:fontcolor=white:x=(w-text_w)/2:y=30+text_h+10:borderw=2:bordercolor=black:enable='between(t,48,58)'`
+      : `drawtext=text='${line1}':fontsize=${fontSize}:fontcolor=white:x=(w-text_w)/2:y=30:borderw=2:bordercolor=black:enable='between(t,48,58)'`
 
     const finalVideoUnix = finalVideo.replace(/\\/g, '/')
     const withWatermarkUnix = withWatermark.replace(/\\/g, '/')
@@ -481,8 +533,11 @@ async function createShortsVideo(
     }
 
     // === 8. Alt yazı ekle ===
+    log(`📹 Alt yazı kontrolü: subtitlePath=${subtitlePath}`, 'info')
+    log(`📹 Alt yazı dosyası var mı: ${subtitlePath ? fs.existsSync(subtitlePath) : 'yol yok'}`, 'info')
+    log(`📹 Output dosyası var mı: ${fs.existsSync(outputPath)}`, 'info')
     if (subtitlePath && fs.existsSync(subtitlePath) && fs.existsSync(outputPath)) {
-      log(`📹 Alt yazı ekleniyor...`, 'info')
+      log(`📹 Alt yazı ekleniyor: ${subtitlePath}`, 'info')
       p(90, 'Alt yazı ekleniyor')
       const withSubs = path.join(outputDir, `${baseName}_subs_final.mp4`)
       if (await burnSubtitles(ffmpegExe, outputPath, subtitlePath, withSubs)) {
@@ -490,7 +545,7 @@ async function createShortsVideo(
         fs.renameSync(withSubs, outputPath)
         log(`   ✅ Alt yazı eklendi`, 'success')
       } else {
-        log(`   ⚠️ Alt yazı eklenemedi`, 'error')
+        log(`   ⚠️ Alt yazı eklenemedi - FFmpeg hatası (sunucu konsolunu kontrol edin)`, 'error')
       }
     }
 
@@ -630,8 +685,15 @@ export async function POST(request: NextRequest) {
           subtitlePath = path.join(baseDir, decodeURIComponent(subtitleMaterial.path.replace(/\//g, path.sep)))
         } else {
           const autoSrtPath = path.join(outputDir, `${baseFileName}_subs.srt`)
-          generateSubtitlesFromVideo(autoSrtPath)
-          subtitlePath = autoSrtPath
+          log(`🎙️ Otomatik altyazı oluşturuluyor (Whisper)...`, 'info')
+          send({ type: 'progress', progress: 6, stage: 'Altyazı oluşturuluyor (Whisper)...' })
+          const whisperOk = await generateSubtitlesFromVideo(videoPath, autoSrtPath, log)
+          if (whisperOk) {
+            subtitlePath = autoSrtPath
+          } else {
+            log(`   ⚠️ Whisper transkripsiyon başarısız, altyazısız devam ediliyor`, 'error')
+            subtitlePath = null
+          }
         }
 
         const sizes: Record<string, string> = {

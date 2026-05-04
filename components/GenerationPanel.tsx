@@ -335,15 +335,22 @@ export default function GenerationPanel({ projectName, projectPath, materials, c
     }
   }, [])
 
-  const openFolder = () => {
+  const openFolder = async () => {
     if (!outputFiles.length) return
     let folder = outputFiles[0].filePath.replace(/\\/g, '/')
     const lastSlash = folder.lastIndexOf('/')
     if (lastSlash > 0) {
       folder = folder.substring(0, lastSlash)
     }
-    const winPath = folder.replace(/^\//, '').replace(/\//g, '\\')
-    window.open(`file:///${winPath.replace(/^([A-Za-z]):/, '$1:')}`, '_blank')
+    try {
+      await fetch('/api/open-folder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folderPath: folder })
+      })
+    } catch (e) {
+      console.error('Klasör açılamadı:', e)
+    }
   }
 
   return (
