@@ -157,7 +157,8 @@ function parseGuide(content: string): GuideOptions {
 async function generateSubtitlesFromVideo(
   videoPath: string,
   outputSrtPath: string,
-  log: (msg: string, type?: string) => void
+  log: (msg: string, type?: string) => void,
+  ffmpegExe: string = 'ffmpeg'
 ): Promise<boolean> {
   return new Promise((resolve) => {
     try {
@@ -170,9 +171,11 @@ async function generateSubtitlesFromVideo(
 
       const videoPathUnix = videoPath.replace(/\\/g, '/')
       const srtPathUnix = outputSrtPath.replace(/\\/g, '/')
+      const ffmpegUnix = ffmpegExe.replace(/\\/g, '/')
 
       log(`   🎙️ Whisper ile altyazı oluşturuluyor...`, 'info')
-      const cmd = `python "${scriptPath}" "${videoPathUnix}" "${srtPathUnix}" base`
+      log(`   🎙️ FFmpeg: ${ffmpegUnix}`, 'info')
+      const cmd = `python "${scriptPath}" "${videoPathUnix}" "${srtPathUnix}" base "${ffmpegUnix}"`
       const proc = spawn(cmd, [], { shell: true })
 
       let stdout = ''
@@ -687,7 +690,7 @@ export async function POST(request: NextRequest) {
           const autoSrtPath = path.join(outputDir, `${baseFileName}_subs.srt`)
           log(`🎙️ Otomatik altyazı oluşturuluyor (Whisper)...`, 'info')
           send({ type: 'progress', progress: 6, stage: 'Altyazı oluşturuluyor (Whisper)...' })
-          const whisperOk = await generateSubtitlesFromVideo(videoPath, autoSrtPath, log)
+          const whisperOk = await generateSubtitlesFromVideo(videoPath, autoSrtPath, log, ffmpegExe)
           if (whisperOk) {
             subtitlePath = autoSrtPath
           } else {
