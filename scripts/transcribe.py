@@ -117,6 +117,13 @@ def transcribe_to_srt(video_path: str, output_srt: str, model_size: str = "base"
             os.unlink(audio_path)
 
 if __name__ == "__main__":
+    # Windows'ta UTF-8 desteği için
+    if os.name == 'nt':
+        import locale
+        # stdout/stderr için utf-8 zorla
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+
     if len(sys.argv) < 3:
         print("Kullanim: python transcribe.py <video_path> <output_srt_path> [model_size] [ffmpeg_path]")
         sys.exit(1)
@@ -126,8 +133,17 @@ if __name__ == "__main__":
     model_size = sys.argv[3] if len(sys.argv) > 3 else "base"
     ffmpeg_hint = sys.argv[4] if len(sys.argv) > 4 else ""
 
+    print(f"DEBUG: Python Encoding: {sys.getfilesystemencoding()}")
+    print(f"DEBUG: Video Path: {video_path}")
+
     if not os.path.exists(video_path):
         print(f"HATA: Video dosyasi bulunamadi: {video_path}", file=sys.stderr)
+        # Mevcut klasördeki dosyaları listele (debug için)
+        try:
+            dir_name = os.path.dirname(os.path.abspath(video_path))
+            print(f"Klasör içeriği ({dir_name}): {os.listdir(dir_name)}", file=sys.stderr)
+        except:
+            pass
         sys.exit(1)
 
     transcribe_to_srt(video_path, output_srt, model_size, ffmpeg_hint)
